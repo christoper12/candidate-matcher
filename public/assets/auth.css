@@ -1,0 +1,35 @@
+:root {
+    --auth-ink: #17212b;
+    --auth-muted: #6b7785;
+    --auth-line: #d8e1e5;
+    --auth-surface: #ffffff;
+    --auth-canvas: #edf3f2;
+    --auth-accent: #0b6e69;
+    --auth-accent-dark: #085853;
+    --auth-error: #8a3030;
+    --auth-error-bg: #fdeaea;
+}
+
+* { box-sizing: border-box; }
+body.auth-page { min-height: 100vh; margin: 0; color: var(--auth-ink); background: var(--auth-canvas); font: 15px/1.5 "Segoe UI", sans-serif; }
+.auth-shell { display: grid; min-height: 100vh; place-items: center; padding: 32px 20px; }
+.auth-card { width: min(100%, 430px); padding: 34px; background: var(--auth-surface); border: 1px solid var(--auth-line); border-radius: 10px; box-shadow: 0 20px 50px rgba(23, 33, 43, .09); }
+.auth-brand { display: flex; align-items: center; gap: 12px; padding-bottom: 28px; border-bottom: 1px solid var(--auth-line); }
+.brand-mark { display: grid; width: 42px; height: 42px; place-items: center; color: #fff; background: var(--auth-accent); border-radius: 8px; font-size: 13px; font-weight: 800; letter-spacing: .04em; }
+.auth-eyebrow { margin: 0 0 4px; color: var(--auth-muted); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.auth-product { margin: 0; font-weight: 700; }
+.auth-heading { padding: 32px 0 22px; }
+.auth-heading h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -.025em; }
+.auth-heading p:last-child { margin: 0; color: var(--auth-muted); }
+.auth-error { margin-bottom: 18px; padding: 11px 13px; color: var(--auth-error); background: var(--auth-error-bg); border: 1px solid #efcaca; border-radius: 5px; font-size: 14px; }
+.auth-form { display: grid; gap: 8px; }
+.auth-form label { margin-top: 7px; color: var(--auth-ink); font-size: 13px; font-weight: 700; }
+.auth-form input { width: 100%; padding: 11px 12px; color: var(--auth-ink); background: #fff; border: 1px solid var(--auth-line); border-radius: 5px; font: inherit; outline: none; }
+.auth-form input:focus { border-color: var(--auth-accent); box-shadow: 0 0 0 3px rgba(11, 110, 105, .13); }
+.auth-submit { margin-top: 18px; padding: 12px 16px; color: #fff; background: var(--auth-accent); border: 0; border-radius: 5px; cursor: pointer; font: inherit; font-weight: 700; }
+.auth-submit:hover { background: var(--auth-accent-dark); }
+.auth-footer { margin: 24px 0 0; color: var(--auth-muted); font-size: 12px; text-align: center; }
+@media (max-width: 480px) {
+    .auth-card { padding: 26px 22px; }
+    .auth-heading h1 { font-size: 24px; }
+}
