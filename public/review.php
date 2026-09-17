@@ -6,7 +6,16 @@ require_once __DIR__ . '/../app/Bootstrap.php';
 require_authentication();
 
 $reviewId = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT);
+$allowedFilters = ['all', 'matched', 'unmatched'];
+$filter = is_string($_GET['filter'] ?? null) && in_array($_GET['filter'], $allowedFilters, true)
+    ? $_GET['filter']
+    : 'all';
+$pendingPage = filter_var($_GET['pending_page'] ?? 1, FILTER_VALIDATE_INT);
+$pendingPage = is_int($pendingPage) && $pendingPage > 0 ? $pendingPage : 1;
 $review = is_int($reviewId) && $reviewId > 0 ? find_review_by_id($reviewId) : null;
+$seekidDetail = $review === null ? 0 : (int) $review['seekid_detail'];
+$previouslyMatched = $review !== null && is_candidate_previously_matched($seekidDetail);
+$candidateNumber = $review === null ? null : find_candidate_number($seekidDetail);
 $reviewMessage = $_SESSION['review_message'] ?? null;
 unset($_SESSION['review_message']);
 $reviewTransition = $_SESSION['review_transition'] ?? null;
@@ -25,7 +34,7 @@ if ($review === null) {
     <link rel="stylesheet" href="<?= htmlspecialchars(public_url('assets/admin.css'), ENT_QUOTES, 'UTF-8') ?>">
     <script src="<?= htmlspecialchars(public_url('assets/app.js'), ENT_QUOTES, 'UTF-8') ?>" defer></script>
 </head>
-<body data-page="detail" data-pending-count="<?= (int) count_pending_reviews() ?>" data-poll-url="<?= htmlspecialchars(public_url('check-new-reviews.php'), ENT_QUOTES, 'UTF-8') ?>" data-queue-url="<?= htmlspecialchars(public_url('index.php?tab=pending&pending_page=1'), ENT_QUOTES, 'UTF-8') ?>">
+<body data-page="detail" data-pending-count="<?= (int) count_pending_reviews() ?>" data-poll-url="<?= htmlspecialchars(public_url('check-new-reviews.php'), ENT_QUOTES, 'UTF-8') ?>" data-queue-url="<?= htmlspecialchars(public_url('index.php?' . http_build_query(['tab' => 'pending', 'pending_page' => $pendingPage, 'filter' => $filter])), ENT_QUOTES, 'UTF-8') ?>">
     <div class="shell">
         <header class="topbar">
             <div>
@@ -42,7 +51,7 @@ if ($review === null) {
         </header>
 
         <main class="content">
-            <a class="back-link loading-link" data-loading-label="Returning to Queue..." href="<?= htmlspecialchars(public_url('index.php'), ENT_QUOTES, 'UTF-8') ?>">&larr; Back to queue</a>
+            <a class="back-link loading-link" data-loading-label="Returning to Queue..." href="<?= htmlspecialchars(public_url('index.php?' . http_build_query(['tab' => 'pending', 'pending_page' => $pendingPage, 'filter' => $filter])), ENT_QUOTES, 'UTF-8') ?>">&larr; Back to queue</a>
             <?php if ($reviewMessage !== null): ?>
                 <div class="notice <?= $reviewMessage['type'] === 'success' ? 'notice-success' : 'notice-warning' ?>" role="status">
                     <?= htmlspecialchars((string) $reviewMessage['text'], ENT_QUOTES, 'UTF-8') ?>
@@ -81,7 +90,15 @@ if ($review === null) {
                         <p class="eyebrow">Review #<?= (int) $review['review_id'] ?></p>
                         <h2>UUID match review</h2>
                     </div>
-                    <span class="status status-<?= htmlspecialchars((string) $review['status'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars((string) $review['status'], ENT_QUOTES, 'UTF-8') ?></span>
+                    <div class="page-heading-badges">
+                        <?php if ($candidateNumber !== null): ?>
+                            <span class="badge-candidate-number">Candidate No: <span class="uuid"><?= htmlspecialchars($candidateNumber, ENT_QUOTES, 'UTF-8') ?></span></span>
+                        <?php endif; ?>
+                        <?php if ($previouslyMatched): ?>
+                            <span class="badge-previously-matched">Previously Matched</span>
+                        <?php endif; ?>
+                        <span class="status status-<?= htmlspecialchars((string) $review['status'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars((string) $review['status'], ENT_QUOTES, 'UTF-8') ?></span>
+                    </div>
                 </div>
 
                 <section class="panel detail-grid">
@@ -100,11 +117,18 @@ if ($review === null) {
                         <form class="loading-form" data-loading-label="Taking Review..." method="post" action="<?= htmlspecialchars(public_url('take_review.php'), ENT_QUOTES, 'UTF-8') ?>">
                             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') ?>">
                             <input type="hidden" name="review_id" value="<?= (int) $review['review_id'] ?>">
+                            <input type="hidden" name="filter" value="<?= htmlspecialchars($filter, ENT_QUOTES, 'UTF-8') ?>">
+                            <input type="hidden" name="pending_page" value="<?= $pendingPage ?>">
                             <button class="button button-primary" type="submit">Take Review</button>
                         </form>
                     </section>
                 <?php elseif ((string) $review['status'] === 'assigned' && (string) ($review['assigned_reviewer'] ?? '') === (string) $_SESSION['dbstffid']): ?>
                     <section class="panel decision-panel">
+                        <?php if ($previouslyMatched): ?>
+                            <div class="banner-warning" role="status">
+                                This candidate has been matched before. You only need to verify or update the UUID match review.
+                            </div>
+                        <?php endif; ?>
                         <div class="panel-header">
                             <h3>Review decision</h3>
                             <span class="muted">Compare both profiles before submitting</span>
@@ -112,6 +136,8 @@ if ($review === null) {
                         <form class="decision-form" method="post" action="<?= htmlspecialchars(public_url('review-submit.php'), ENT_QUOTES, 'UTF-8') ?>">
                             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') ?>">
                             <input type="hidden" name="review_id" value="<?= (int) $review['review_id'] ?>">
+                            <input type="hidden" name="filter" value="<?= htmlspecialchars($filter, ENT_QUOTES, 'UTF-8') ?>">
+                            <input type="hidden" name="pending_page" value="<?= $pendingPage ?>">
                             <label class="reason-label" for="review_reason">Review reason <span>(optional for MATCH, required for UNMATCH)</span></label>
                             <textarea id="review_reason" name="review_reason" rows="4" maxlength="10000" placeholder="Explain the comparison result..."></textarea>
                             <div class="decision-actions">

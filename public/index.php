@@ -28,10 +28,23 @@ $allHistorySeekId = substr($allHistorySeekId, 0, 100);
 $allHistoryProposedUuid = substr($readQueryValue('proposed_uuid'), 0, 100);
 $allHistoryReviewedBy = substr($readQueryValue('reviewed_by'), 0, 100);
 $reviewerId = (string) $_SESSION['dbstffid'];
-$pendingTotal = count_pending_reviews();
+$allowedFilters = ['matched', 'unmatched', 'all'];
+$currentFilter = $readQueryValue('filter') ?: 'all';
+if (!in_array($currentFilter, $allowedFilters, true)) {
+    $currentFilter = 'all';
+}
+$pendingTotal = count_pending_reviews($currentFilter);
 $pendingPages = max(1, (int) ceil($pendingTotal / $pageSize));
-$pendingPage = min($pendingPage, $pendingPages);
-$reviews = find_pending_reviews($pageSize, ($pendingPage - 1) * $pageSize);
+if ($pendingPage > $pendingPages) {
+    header('Location: ' . public_url('index.php?' . http_build_query([
+        'tab' => 'pending',
+        'pending_page' => $pendingPages,
+        'filter' => $currentFilter,
+    ])));
+    exit;
+}
+
+$reviews = find_pending_reviews($pageSize, ($pendingPage - 1) * $pageSize, $currentFilter);
 $assignedTotal = count_assigned_reviews($reviewerId);
 $assignedPages = max(1, (int) ceil($assignedTotal / $pageSize));
 $activePage = min($activePage, $assignedPages);
@@ -55,7 +68,7 @@ $queueMessage = $_SESSION['queue_message'] ?? null;
 unset($_SESSION['queue_message']);
 $reviewTransition = $_SESSION['review_transition'] ?? null;
 unset($_SESSION['review_transition']);
-$pageUrl = static function (string $tab, int $page) use ($allHistoryResult, $allHistorySeekId, $allHistoryProposedUuid, $allHistoryReviewedBy): string {
+$pageUrl = static function (string $tab, int $page) use ($allHistoryResult, $allHistorySeekId, $allHistoryProposedUuid, $allHistoryReviewedBy, $currentFilter): string {
     $parameter = match ($tab) {
         'pending' => 'pending_page',
         'active' => 'active_page',
@@ -79,6 +92,10 @@ $pageUrl = static function (string $tab, int $page) use ($allHistoryResult, $all
         if ($allHistoryReviewedBy !== '') {
             $query['reviewed_by'] = $allHistoryReviewedBy;
         }
+    }
+
+    if ($tab === 'pending') {
+        $query['filter'] = $currentFilter;
     }
 
     return public_url('index.php?' . http_build_query($query));
@@ -112,7 +129,7 @@ $paginationItems = static function (int $currentPage, int $totalPages): array {
     <link rel="stylesheet" href="<?= htmlspecialchars(public_url('assets/admin.css'), ENT_QUOTES, 'UTF-8') ?>">
     <script src="<?= htmlspecialchars(public_url('assets/app.js'), ENT_QUOTES, 'UTF-8') ?>" defer></script>
 </head>
-<body data-page="queue" data-pending-count="<?= (int) $pendingTotal ?>" data-poll-url="<?= htmlspecialchars(public_url('check-new-reviews.php'), ENT_QUOTES, 'UTF-8') ?>" data-queue-url="<?= htmlspecialchars(public_url('index.php?tab=pending&pending_page=1'), ENT_QUOTES, 'UTF-8') ?>">
+<body data-page="queue" data-pending-count="<?= (int) $pendingTotal ?>" data-poll-url="<?= htmlspecialchars(public_url('check-new-reviews.php'), ENT_QUOTES, 'UTF-8') ?>" data-queue-url="<?= htmlspecialchars(public_url('index.php?tab=pending&pending_page=1&filter=all'), ENT_QUOTES, 'UTF-8') ?>">
     <div class="shell">
         <header class="topbar">
             <div>
@@ -161,8 +178,29 @@ $paginationItems = static function (int $currentPage, int $totalPages): array {
                 <section class="panel tab-panel" aria-labelledby="queue-title">
                     <div class="panel-header">
                         <h3 id="queue-title">Needs attention</h3>
+
+                        <!-- === FILTER UI === -->
+                        <div class="panel-filters" role="group" aria-label="Filter pending reviews">
+                            <a class="filter-chip loading-link <?= $currentFilter === 'all' ? 'is-active' : '' ?>"
+                            data-loading-label="Loading..."
+                            href="<?= htmlspecialchars(public_url('index.php?' . http_build_query(['tab' => 'pending', 'pending_page' => 1, 'filter' => 'all'])), ENT_QUOTES, 'UTF-8') ?>">
+                                All
+                            </a>
+                            <a class="filter-chip loading-link <?= $currentFilter === 'matched' ? 'is-active' : '' ?>"
+                            data-loading-label="Loading..."
+                            href="<?= htmlspecialchars(public_url('index.php?' . http_build_query(['tab' => 'pending', 'pending_page' => 1, 'filter' => 'matched'])), ENT_QUOTES, 'UTF-8') ?>">
+                                Matched
+                            </a>
+                            <a class="filter-chip loading-link <?= $currentFilter === 'unmatched' ? 'is-active' : '' ?>"
+                            data-loading-label="Loading..."
+                            href="<?= htmlspecialchars(public_url('index.php?' . http_build_query(['tab' => 'pending', 'pending_page' => 1, 'filter' => 'unmatched'])), ENT_QUOTES, 'UTF-8') ?>">
+                                Unmatched
+                            </a>
+                        </div>
+
                         <span class="muted">Page <?= $pendingPage ?> of <?= $pendingPages ?></span>
                     </div>
+
                     <?php if ($reviews === []): ?>
                         <div class="empty-state">
                             <strong>No pending reviews</strong>
@@ -175,6 +213,7 @@ $paginationItems = static function (int $currentPage, int $totalPages): array {
                                 <tr>
                                     <th>Review ID</th>
                                     <th>Seek ID</th>
+                                    <th>Candidate</th>          <!-- === KOLOM BARU === -->
                                     <th>Proposed UUID</th>
                                     <th>Numeric profile</th>
                                     <th>UUID profile</th>
@@ -187,8 +226,24 @@ $paginationItems = static function (int $currentPage, int $totalPages): array {
                             <tbody>
                                 <?php foreach ($reviews as $review): ?>
                                     <tr>
-                                        <td><a class="review-link loading-link" data-loading-label="Opening Review..." href="<?= htmlspecialchars(public_url('review.php?id=' . (int) $review['review_id']), ENT_QUOTES, 'UTF-8') ?>">#<?= (int) $review['review_id'] ?></a></td>
+                                        <td>
+                                            <a class="review-link loading-link"
+                                            data-loading-label="Opening Review..."
+                                            href="<?= htmlspecialchars(public_url('review.php?' . http_build_query(['id' => (int) $review['review_id'], 'filter' => $currentFilter, 'pending_page' => $pendingPage])), ENT_QUOTES, 'UTF-8') ?>">
+                                                #<?= (int) $review['review_id'] ?>
+                                            </a>
+                                        </td>
                                         <td><?= (int) $review['seekid_detail'] ?></td>
+
+                                        <!-- === CANDNO === -->
+                                        <td>
+                                            <?php if (!empty($review['candno'])): ?>
+                                                <span class="badge badge-matched"><?= htmlspecialchars((string) $review['candno'], ENT_QUOTES, 'UTF-8') ?></span>
+                                            <?php else: ?>
+                                                <span class="badge badge-unmatched">—</span>
+                                            <?php endif; ?>
+                                        </td>
+
                                         <td class="uuid"><?= htmlspecialchars((string) $review['proposed_uuid'], ENT_QUOTES, 'UTF-8') ?></td>
                                         <td><a href="<?= htmlspecialchars((string) $review['numeric_profile_url'], ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Open profile</a></td>
                                         <td><a href="<?= htmlspecialchars((string) $review['uuid_profile_url'], ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Open profile</a></td>
@@ -199,6 +254,8 @@ $paginationItems = static function (int $currentPage, int $totalPages): array {
                                             <form class="loading-form" data-loading-label="Taking Review..." method="post" action="<?= htmlspecialchars(public_url('take_review.php'), ENT_QUOTES, 'UTF-8') ?>">
                                                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') ?>">
                                                 <input type="hidden" name="review_id" value="<?= (int) $review['review_id'] ?>">
+                                                <input type="hidden" name="filter" value="<?= htmlspecialchars($currentFilter, ENT_QUOTES, 'UTF-8') ?>">
+                                                <input type="hidden" name="pending_page" value="<?= $pendingPage ?>">
                                                 <button class="button button-primary" type="submit">Take Review</button>
                                             </form>
                                         </td>
@@ -207,27 +264,39 @@ $paginationItems = static function (int $currentPage, int $totalPages): array {
                             </tbody>
                             </table>
                         </div>
+
                         <?php if ($pendingPages > 1): ?>
                             <nav class="pagination" aria-label="Pending review pages">
-                                <a class="pagination-link loading-link" data-loading-label="Loading..." href="<?= htmlspecialchars($pageUrl('pending', 1), ENT_QUOTES, 'UTF-8') ?>">FIRST</a>
+                                <a class="pagination-link loading-link" data-loading-label="Loading..."
+                                href="<?= htmlspecialchars($pageUrl('pending', 1), ENT_QUOTES, 'UTF-8') ?>">FIRST</a>
+
                                 <?php if ($pendingPage > 1): ?>
-                                    <a class="pagination-control loading-link" data-loading-label="Loading..." href="<?= htmlspecialchars($pageUrl('pending', $pendingPage - 1), ENT_QUOTES, 'UTF-8') ?>">Previous</a>
+                                    <a class="pagination-control loading-link" data-loading-label="Loading..."
+                                    href="<?= htmlspecialchars($pageUrl('pending', $pendingPage - 1), ENT_QUOTES, 'UTF-8') ?>">Previous</a>
                                 <?php else: ?>
                                     <span class="pagination-control is-disabled" aria-disabled="true">Previous</span>
                                 <?php endif; ?>
+
                                 <?php foreach ($paginationItems($pendingPage, $pendingPages) as $page): ?>
                                     <?php if ($page === 'ellipsis'): ?>
                                         <span class="pagination-ellipsis" aria-hidden="true">...</span>
                                     <?php else: ?>
-                                        <a class="pagination-link loading-link <?= $page === $pendingPage ? 'is-current' : '' ?>" data-loading-label="Loading..." href="<?= htmlspecialchars($pageUrl('pending', $page), ENT_QUOTES, 'UTF-8') ?>" <?= $page === $pendingPage ? 'aria-current="page"' : '' ?>><?= $page ?></a>
+                                        <a class="pagination-link loading-link <?= $page === $pendingPage ? 'is-current' : '' ?>"
+                                        data-loading-label="Loading..."
+                                        href="<?= htmlspecialchars($pageUrl('pending', $page), ENT_QUOTES, 'UTF-8') ?>"
+                                        <?= $page === $pendingPage ? 'aria-current="page"' : '' ?>><?= $page ?></a>
                                     <?php endif; ?>
                                 <?php endforeach; ?>
+
                                 <?php if ($pendingPage < $pendingPages): ?>
-                                    <a class="pagination-control loading-link" data-loading-label="Loading..." href="<?= htmlspecialchars($pageUrl('pending', $pendingPage + 1), ENT_QUOTES, 'UTF-8') ?>">Next</a>
+                                    <a class="pagination-control loading-link" data-loading-label="Loading..."
+                                    href="<?= htmlspecialchars($pageUrl('pending', $pendingPage + 1), ENT_QUOTES, 'UTF-8') ?>">Next</a>
                                 <?php else: ?>
                                     <span class="pagination-control is-disabled" aria-disabled="true">Next</span>
                                 <?php endif; ?>
-                                <a class="pagination-link loading-link" data-loading-label="Loading..." href="<?= htmlspecialchars($pageUrl('pending', $pendingPages), ENT_QUOTES, 'UTF-8') ?>">END</a>
+
+                                <a class="pagination-link loading-link" data-loading-label="Loading..."
+                                href="<?= htmlspecialchars($pageUrl('pending', $pendingPages), ENT_QUOTES, 'UTF-8') ?>">END</a>
                             </nav>
                         <?php endif; ?>
                     <?php endif; ?>

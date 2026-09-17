@@ -8,12 +8,29 @@ require_authentication();
 $reviewId = filter_var($_POST['review_id'] ?? null, FILTER_VALIDATE_INT);
 $decision = (string) ($_POST['decision'] ?? '');
 $reviewReason = trim((string) ($_POST['review_reason'] ?? ''));
-$redirectToReview = static function (int $id, string $type, string $text): never {
+$allowedFilters = ['all', 'matched', 'unmatched'];
+$filter = is_string($_POST['filter'] ?? null) && in_array($_POST['filter'], $allowedFilters, true)
+    ? $_POST['filter']
+    : 'all';
+$pendingPage = filter_var($_POST['pending_page'] ?? 1, FILTER_VALIDATE_INT);
+$pendingPage = is_int($pendingPage) && $pendingPage > 0 ? $pendingPage : 1;
+$queueUrl = static function (string $filter, int $pendingPage): string {
+    return public_url('index.php?' . http_build_query([
+        'tab' => 'pending',
+        'pending_page' => $pendingPage,
+        'filter' => $filter,
+    ]));
+};
+$redirectToReview = static function (int $id, string $type, string $text) use ($filter, $pendingPage): never {
     $_SESSION['review_message'] = [
         'type' => $type,
         'text' => $text,
     ];
-    header('Location: ' . public_url('review.php?id=' . $id));
+    header('Location: ' . public_url('review.php?' . http_build_query([
+        'id' => $id,
+        'filter' => $filter,
+        'pending_page' => $pendingPage,
+    ])));
     exit;
 };
 
@@ -89,13 +106,17 @@ if ($assignedReviewId !== null) {
         'type' => 'success',
         'text' => $message,
     ];
-    header('Location: ' . public_url('review.php?id=' . $assignedReviewId));
+        header('Location: ' . public_url('review.php?' . http_build_query([
+            'id' => $assignedReviewId,
+            'filter' => $filter,
+            'pending_page' => $pendingPage,
+        ])));
     exit;
 }
 
 for ($attempt = 0; $attempt < 3; $attempt++) {
     try {
-        $nextReviewId = find_next_pending_review_id();
+        $nextReviewId = find_next_pending_review_id($filter);
     } catch (Throwable $exception) {
         error_log('Unable to find next pending review: ' . $exception->getMessage());
         break;
@@ -106,7 +127,7 @@ for ($attempt = 0; $attempt < 3; $attempt++) {
             'type' => 'success',
             'text' => $message . ' There are no more pending reviews.',
         ];
-        header('Location: ' . public_url('index.php'));
+        header('Location: ' . $queueUrl($filter, $pendingPage));
         exit;
     }
 
@@ -122,7 +143,11 @@ for ($attempt = 0; $attempt < 3; $attempt++) {
             'type' => 'success',
             'text' => $message,
         ];
-        header('Location: ' . public_url('review.php?id=' . $nextReviewId));
+        header('Location: ' . public_url('review.php?' . http_build_query([
+            'id' => $nextReviewId,
+            'filter' => $filter,
+            'pending_page' => $pendingPage,
+        ])));
         exit;
     }
 }
@@ -131,5 +156,5 @@ $_SESSION['queue_message'] = [
     'type' => 'success',
     'text' => $message . ' The next review could not be claimed, so please choose another one from the queue.',
 ];
-header('Location: ' . public_url('index.php'));
+header('Location: ' . $queueUrl($filter, $pendingPage));
 exit;

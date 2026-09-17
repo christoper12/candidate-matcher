@@ -2,65 +2,158 @@
 
 declare(strict_types=1);
 
-function count_pending_reviews(): int
+// function count_pending_reviews(): int
+// {
+//     $statement = db_connection()->prepare(
+//         'SELECT COUNT(*)
+//          FROM seek_uuid_match_review
+//          WHERE status = :status'
+//     );
+//     $statement->execute(['status' => 'pending']);
+
+//     return (int) $statement->fetchColumn();
+// }
+
+function count_pending_reviews(string $filter = 'all'): int
 {
+    $candnoCondition = match ($filter) {
+        'matched'   => 'seek_scrap.candno IS NOT NULL AND seek_scrap.candno <> :empty_candno',
+        'unmatched' => '(seek_scrap.candno IS NULL OR seek_scrap.candno = :empty_candno)',
+        default     => '1=1',
+    };
+
     $statement = db_connection()->prepare(
-        'SELECT COUNT(*)
-         FROM seek_uuid_match_review
-         WHERE status = :status'
+        "SELECT COUNT(*)
+         FROM (
+             SELECT seek_uuid_match_review.seekid_detail
+             FROM seek_uuid_match_review
+             LEFT JOIN seek_scrap_detail
+                 ON seek_uuid_match_review.seekid_detail = seek_scrap_detail.seekid_detail
+             LEFT JOIN seek_scrap
+                 ON seek_scrap_detail.seekid_detail = seek_scrap.seek_scrap_id
+             WHERE seek_uuid_match_review.status = :status
+               AND {$candnoCondition}
+             GROUP BY seek_uuid_match_review.seekid_detail
+         ) pending_reviews"
     );
-    $statement->execute(['status' => 'pending']);
+
+    $statement->bindValue(':status', 'pending', PDO::PARAM_STR);
+    if ($filter === 'matched' || $filter === 'unmatched') {
+        $statement->bindValue(':empty_candno', '', PDO::PARAM_STR);
+    }
+    $statement->execute();
 
     return (int) $statement->fetchColumn();
 }
 
-function find_pending_reviews(int $limit = 25, int $offset = 0): array
+function is_candidate_previously_matched(int $seekidDetail): bool
 {
+    // TODO(verify): konfirmasi relasi via SHOW CREATE TABLE.
     $statement = db_connection()->prepare(
-        'SELECT review_id, seekid_detail, proposed_uuid, numeric_profile_url,
-                uuid_profile_url, status, assigned_reviewer, created_at
-         FROM seek_uuid_match_review
-            WHERE status = :status
-            ORDER BY review_id ASC
-            LIMIT :limit OFFSET :offset'
+        'SELECT 1
+         FROM seek_scrap_detail
+         INNER JOIN seek_scrap
+             ON seek_scrap_detail.seekid_detail = seek_scrap.seek_scrap_id
+         WHERE seek_scrap_detail.seekid_detail = :seekid_detail
+           AND seek_scrap.candno IS NOT NULL
+           AND seek_scrap.candno <> :empty_candno
+         LIMIT 1'
     );
-        $statement->execute([
-           'status' => 'pending',
-           'limit' => $limit,
-           'offset' => $offset,
-        ]);
+    $statement->execute([
+        'seekid_detail' => $seekidDetail,
+        'empty_candno' => '',
+    ]);
+
+    return $statement->fetchColumn() !== false;
+}
+
+// function find_pending_reviews(int $limit = 25, int $offset = 0): array
+// {
+//     $statement = db_connection()->prepare(
+//         'SELECT review_id, seekid_detail, proposed_uuid, numeric_profile_url,
+//                 uuid_profile_url, status, assigned_reviewer, created_at
+//          FROM seek_uuid_match_review
+//             WHERE status = :status
+//             ORDER BY review_id ASC
+//             LIMIT :limit OFFSET :offset'
+//     );
+//         $statement->execute([
+//            'status' => 'pending',
+//            'limit' => $limit,
+//            'offset' => $offset,
+//         ]);
+
+//     return $statement->fetchAll();
+// }
+
+function find_pending_reviews(int $limit = 25, int $offset = 0, string $filter = 'all'): array
+{
+    $candnoCondition = match ($filter) {
+        'matched'   => 'seek_scrap.candno IS NOT NULL AND seek_scrap.candno <> :empty_candno',
+        'unmatched' => '(seek_scrap.candno IS NULL OR seek_scrap.candno = :empty_candno)',
+        default     => '1=1', // semua
+    };
+
+    $statement = db_connection()->prepare(
+        "SELECT seek_uuid_match_review.*, MAX(seek_scrap.candno) AS candno
+         FROM seek_uuid_match_review
+         INNER JOIN (
+             SELECT MIN(seek_uuid_match_review.review_id) AS review_id
+             FROM seek_uuid_match_review
+             LEFT JOIN seek_scrap_detail
+                 ON seek_uuid_match_review.seekid_detail = seek_scrap_detail.seekid_detail
+             LEFT JOIN seek_scrap
+                 ON seek_scrap_detail.seekid_detail = seek_scrap.seek_scrap_id
+             WHERE seek_uuid_match_review.status = :status
+               AND {$candnoCondition}
+             GROUP BY seek_uuid_match_review.seekid_detail
+         ) pending_reviews
+             ON pending_reviews.review_id = seek_uuid_match_review.review_id
+         LEFT JOIN seek_scrap_detail
+             ON seek_uuid_match_review.seekid_detail = seek_scrap_detail.seekid_detail
+         LEFT JOIN seek_scrap
+             ON seek_scrap_detail.seekid_detail = seek_scrap.seek_scrap_id
+         GROUP BY seek_uuid_match_review.review_id
+         ORDER BY seek_uuid_match_review.seekid_detail ASC
+         LIMIT :limit OFFSET :offset"
+    );
+
+    $statement->bindValue(':status', 'pending', PDO::PARAM_STR);
+    if ($filter === 'matched' || $filter === 'unmatched') {
+        $statement->bindValue(':empty_candno', '', PDO::PARAM_STR);
+    }
+    $statement->bindValue(':limit', $limit, PDO::PARAM_INT);
+    $statement->bindValue(':offset', $offset, PDO::PARAM_INT);
+
+    $statement->execute();
 
     return $statement->fetchAll();
 }
 
-function find_next_pending_review_id(): ?int
+function find_next_pending_review_id(string $context = 'all'): ?int
 {
+    // TODO(verify): konfirmasi relasi via SHOW CREATE TABLE.
+    $primaryCondition = in_array($context, ['unmatch', 'unmatched'], true)
+        ? '(seek_scrap.candno IS NULL OR seek_scrap.candno = :empty_candno)'
+        : 'seek_scrap.candno IS NOT NULL AND seek_scrap.candno <> :empty_candno';
     $statement = db_connection()->prepare(
-        'SELECT review_id
-         FROM seek_uuid_match_review
+        "SELECT review_id
+         FROM seek_uuid_match_review AS pending_review
          WHERE status = :status
-         ORDER BY review_id ASC
-         LIMIT 1'
-    );
-    $statement->execute(['status' => 'pending']);
-    $reviewId = $statement->fetchColumn();
-
-    return $reviewId === false ? null : (int) $reviewId;
-}
-
-function find_next_assigned_review_id(string $reviewerId): ?int
-{
-    $statement = db_connection()->prepare(
-        'SELECT review_id
-         FROM seek_uuid_match_review
-         WHERE status = :status
-           AND assigned_reviewer = :assigned_reviewer
-         ORDER BY review_id ASC
-         LIMIT 1'
+         ORDER BY CASE WHEN EXISTS (
+             SELECT 1
+             FROM seek_scrap_detail
+             INNER JOIN seek_scrap
+                 ON seek_scrap_detail.seekid_detail = seek_scrap.seek_scrap_id
+             WHERE seek_scrap_detail.seekid_detail = pending_review.seekid_detail
+               AND {$primaryCondition}
+         ) THEN 0 ELSE 1 END,
+         review_id ASC
+         LIMIT 1"
     );
     $statement->execute([
-        'status' => 'assigned',
-        'assigned_reviewer' => $reviewerId,
+        'status' => 'pending',
+        'empty_candno' => '',
     ]);
     $reviewId = $statement->fetchColumn();
 
@@ -81,6 +174,27 @@ function count_assigned_reviews(string $reviewerId): int
     ]);
 
     return (int) $statement->fetchColumn();
+}
+
+function find_candidate_number(int $seekidDetail): ?string
+{
+    // TODO(verify): konfirmasi relasi via SHOW CREATE TABLE.
+    $statement = db_connection()->prepare(
+        'SELECT seek_scrap.candno
+         FROM seek_scrap_detail
+         INNER JOIN seek_scrap
+             ON seek_scrap_detail.seekid_detail = seek_scrap.seek_scrap_id
+         WHERE seek_scrap_detail.seekid_detail = :seekid_detail
+         LIMIT 1'
+    );
+    $statement->execute(['seekid_detail' => $seekidDetail]);
+    $candidateNumber = $statement->fetchColumn();
+
+    if ($candidateNumber === false || $candidateNumber === null || (string) $candidateNumber === '') {
+        return null;
+    }
+
+    return (string) $candidateNumber;
 }
 
 function find_assigned_reviews(string $reviewerId, int $limit = 25, int $offset = 0): array
