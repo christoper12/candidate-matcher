@@ -114,7 +114,7 @@ function find_pending_reviews(int $limit = 25, int $offset = 0, string $filter =
          LEFT JOIN seek_scrap
              ON seek_scrap_detail.seekid_detail = seek_scrap.seek_scrap_id
          GROUP BY seek_uuid_match_review.review_id
-         ORDER BY seek_uuid_match_review.seekid_detail ASC
+         ORDER BY seek_uuid_match_review.review_id ASC
          LIMIT :limit OFFSET :offset"
     );
 
@@ -506,6 +506,14 @@ function decide_review(int $reviewId, string $reviewerId, string $decision, stri
             'review_id' => $reviewId,
         ]);
         $connection->commit();
+
+        if ($decision === 'MATCH') {
+            try {
+                queue_merge_job((string) $review['proposed_uuid']);
+            } catch (Throwable $queueException) {
+                error_log('Unable to queue background merge job: ' . $queueException->getMessage());
+            }
+        }
 
         return $decision === 'MATCH' ? 'matched' : 'unmatched';
     } catch (Throwable $exception) {
